@@ -53,28 +53,35 @@ jobs:
           kubectl get svc myapp-svc
           kubectl get endpoints myapp-svc
 
-      - name: Smoke test (direct NodePort)
+      - name: Smoke test (kubectl port-forward)
         shell: powershell
         run: |
-          $ip = minikube ip
-          $nodePort = kubectl get svc myapp-svc -o jsonpath="{.spec.ports[0].nodePort}"
+          # Port-forward service port 80 -> local 5000 in background
+          $pf = Start-Process -FilePath "kubectl" -ArgumentList "port-forward","svc/myapp-svc","5000:80" -NoNewWindow -PassThru
 
-          Write-Host "Minikube IP: $ip"
-          Write-Host "NodePort: $nodePort"
+          try {
+            # Give port-forward a moment to start
+            Start-Sleep -Seconds 3
 
-          # IMPORTANT: PowerShell needs $() when using ":" in strings
-          $url = "http://$($ip):$($nodePort)/health"
-          Write-Host "Testing URL: $url"
+            $url = "http://127.0.0.1:5000/health"
+            Write-Host "Testing URL: $url"
 
-          for ($i=1; $i -le 20; $i++) {
-            try {
-              $resp = Invoke-RestMethod $url -TimeoutSec 5
-              Write-Host "Health OK:" $resp
-              exit 0
-            } catch {
-              Write-Host "Not ready yet... attempt $i"
-              Start-Sleep -Seconds 3
+            for ($i=1; $i -le 20; $i++) {
+              try {
+                $resp = Invoke-RestMethod $url -TimeoutSec 5
+                Write-Host "Health OK:" $resp
+                exit 0
+              } catch {
+                Write-Host "Not ready yet... attempt $i"
+                Start-Sleep -Seconds 2
+              }
+            }
+
+            throw "Health check failed after retries"
+          }
+          finally {
+            # Stop port-forward
+            if ($pf -and !$pf.HasExited) {
+              Stop-Process -Id $pf.Id -Force
             }
           }
-
-          throw "Health check failed after retries"

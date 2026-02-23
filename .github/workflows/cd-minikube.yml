@@ -1,16 +1,17 @@
 name: CD to Minikube
 
 on:
-  push:
-    branches: ["main"]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
-# Optional but recommended: if you push again, cancel the older deploy run automatically
 concurrency:
   group: cd-minikube
   cancel-in-progress: true
 
 jobs:
   deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, Windows, X64]
 
     steps:
@@ -23,15 +24,15 @@ jobs:
           kubectl config use-context minikube
           kubectl get nodes
 
-      - name: Build Docker image
+      - name: Build Docker image (CI-tested commit)
         shell: powershell
         run: |
-          docker build -t myapp:${{ github.sha }} .
+          docker build -t myapp:${{ github.event.workflow_run.head_sha }} .
 
       - name: Load image into Minikube
         shell: powershell
         run: |
-          minikube image load myapp:${{ github.sha }}
+          minikube image load myapp:${{ github.event.workflow_run.head_sha }}
 
       - name: Apply manifests
         shell: powershell
@@ -39,30 +40,20 @@ jobs:
           kubectl apply -f k8s/service.yaml
           kubectl apply -f k8s/deployment.yaml
 
-      - name: Update deployment image
+      - name: Update deployment image + rollout
         shell: powershell
         run: |
-          kubectl set image deployment/myapp myapp=myapp:${{ github.sha }}
+          kubectl set image deployment/myapp myapp=myapp:${{ github.event.workflow_run.head_sha }}
           kubectl rollout status deployment/myapp --timeout=180s
           kubectl get pods
           kubectl get svc myapp-svc
 
-      - name: Show service + endpoints (debug)
-        shell: powershell
-        run: |
-          kubectl get svc myapp-svc
-          kubectl get endpoints myapp-svc
-
       - name: Smoke test (kubectl port-forward)
         shell: powershell
         run: |
-          # Port-forward service port 80 -> local 5000 in background
           $pf = Start-Process -FilePath "kubectl" -ArgumentList "port-forward","svc/myapp-svc","5000:80" -NoNewWindow -PassThru
-
           try {
-            # Give port-forward a moment to start
             Start-Sleep -Seconds 3
-
             $url = "http://127.0.0.1:5000/health"
             Write-Host "Testing URL: $url"
 
@@ -80,8 +71,12 @@ jobs:
             throw "Health check failed after retries"
           }
           finally {
-            # Stop port-forward
-            if ($pf -and !$pf.HasExited) {
-              Stop-Process -Id $pf.Id -Force
-            }
+            if ($pf -and !$pf.HasExited) { Stop-Process -Id $pf.Id -Force }
           }
+
+      - name: Rollback if anything failed
+        if: failure()
+        shell: powershell
+        run: |
+          kubectl rollout undo deployment/myapp
+          kubectl rollout status deployment/myapp --timeout=180s

@@ -1,0 +1,45 @@
+name: CD to Minikube
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image (commit SHA tag)
+        shell: powershell
+        run: |
+          docker build -t myapp:${{ github.sha }} .
+
+      - name: Load image into Minikube
+        shell: powershell
+        run: |
+          minikube image load myapp:${{ github.sha }}
+
+      - name: Update deployment image + apply manifests
+        shell: powershell
+        run: |
+          (Get-Content k8s/deployment.yaml) `
+            -replace "image:\s*.*", "image: myapp:${{ github.sha }}" | `
+            Set-Content k8s/deployment.yaml
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+
+      - name: Wait for rollout
+        shell: powershell
+        run: |
+          kubectl rollout status deployment/myapp --timeout=120s
+          kubectl get pods
+
+      - name: Smoke test /health
+        shell: powershell
+        run: |
+          $url = (minikube service myapp-svc --url)
+          Write-Host "Service URL: $url"
+          Invoke-RestMethod "$url/health"

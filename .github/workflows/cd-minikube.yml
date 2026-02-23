@@ -40,10 +40,40 @@ jobs:
           kubectl set image deployment/myapp myapp=myapp:${{ github.sha }}
           kubectl rollout status deployment/myapp --timeout=180s
           kubectl get pods
+        
+      - name: Show service + endpoints (debug)
+        shell: powershell
+        run: |
+          kubectl get svc myapp-svc
+          kubectl get endpoints myapp-svc
+          kubectl describe svc myapp-svc
 
       - name: Smoke test
         shell: powershell
         run: |
-          $url = (minikube service myapp-svc --url)
+          # Get service URL (sometimes first call is slow)
+          $url = ""
+          for ($i=1; $i -le 10; $i++) {
+            try {
+              $url = (minikube service myapp-svc --url)
+              if ($url) { break }
+            } catch {
+              Start-Sleep -Seconds 2
+            }
+          }
+          if (-not $url) { throw "Could not get service URL from minikube" }
+
           Write-Host "Service URL: $url"
-          Invoke-RestMethod "$url/health"
+
+          # Try /health multiple times (pods may still be warming up)
+          for ($i=1; $i -le 20; $i++) {
+            try {
+              $resp = Invoke-RestMethod "$url/health" -TimeoutSec 5
+              Write-Host "Health OK:" $resp
+              exit 0
+            } catch {
+              Write-Host "Health not ready yet... attempt $i"
+              Start-Sleep -Seconds 3
+            }
+          }
+          throw "Health check failed after retries"

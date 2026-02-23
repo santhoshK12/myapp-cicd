@@ -6,13 +6,19 @@ on:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Windows, X64]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build Docker image (commit SHA tag)
+      - name: Ensure kube context is minikube
+        shell: powershell
+        run: |
+          kubectl config use-context minikube
+          kubectl get nodes
+
+      - name: Build Docker image
         shell: powershell
         run: |
           docker build -t myapp:${{ github.sha }} .
@@ -22,22 +28,20 @@ jobs:
         run: |
           minikube image load myapp:${{ github.sha }}
 
-      - name: Update deployment image + apply manifests
+      - name: Apply manifests
         shell: powershell
         run: |
-          (Get-Content k8s/deployment.yaml) `
-            -replace "image:\s*.*", "image: myapp:${{ github.sha }}" | `
-            Set-Content k8s/deployment.yaml
-          kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/deployment.yaml
 
-      - name: Wait for rollout
+      - name: Update deployment image
         shell: powershell
         run: |
-          kubectl rollout status deployment/myapp --timeout=120s
+          kubectl set image deployment/myapp myapp=myapp:${{ github.sha }}
+          kubectl rollout status deployment/myapp --timeout=180s
           kubectl get pods
 
-      - name: Smoke test /health
+      - name: Smoke test
         shell: powershell
         run: |
           $url = (minikube service myapp-svc --url)

@@ -4,6 +4,11 @@ on:
   push:
     branches: ["main"]
 
+# Optional but recommended: if you push again, cancel the older deploy run automatically
+concurrency:
+  group: cd-minikube
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: [self-hosted, Windows, X64]
@@ -40,30 +45,27 @@ jobs:
           kubectl set image deployment/myapp myapp=myapp:${{ github.sha }}
           kubectl rollout status deployment/myapp --timeout=180s
           kubectl get pods
-        
+          kubectl get svc myapp-svc
+
       - name: Show service + endpoints (debug)
         shell: powershell
         run: |
           kubectl get svc myapp-svc
           kubectl get endpoints myapp-svc
-          kubectl describe svc myapp-svc
 
       - name: Smoke test (direct NodePort)
         shell: powershell
         run: |
-          # Get Minikube IP
           $ip = minikube ip
-
-          # Get NodePort
           $nodePort = kubectl get svc myapp-svc -o jsonpath="{.spec.ports[0].nodePort}"
 
           Write-Host "Minikube IP: $ip"
           Write-Host "NodePort: $nodePort"
 
-          $url = "http://$ip:$nodePort/health"
+          # IMPORTANT: PowerShell needs $() when using ":" in strings
+          $url = "http://$($ip):$($nodePort)/health"
           Write-Host "Testing URL: $url"
 
-          # Retry health check
           for ($i=1; $i -le 20; $i++) {
             try {
               $resp = Invoke-RestMethod $url -TimeoutSec 5
@@ -75,4 +77,4 @@ jobs:
             }
           }
 
-          throw "Health check failed"
+          throw "Health check failed after retries"

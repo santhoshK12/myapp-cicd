@@ -48,32 +48,31 @@ jobs:
           kubectl get endpoints myapp-svc
           kubectl describe svc myapp-svc
 
-      - name: Smoke test
+      - name: Smoke test (direct NodePort)
         shell: powershell
         run: |
-          # Get service URL (sometimes first call is slow)
-          $url = ""
-          for ($i=1; $i -le 10; $i++) {
-            try {
-              $url = (minikube service myapp-svc --url)
-              if ($url) { break }
-            } catch {
-              Start-Sleep -Seconds 2
-            }
-          }
-          if (-not $url) { throw "Could not get service URL from minikube" }
+          # Get Minikube IP
+          $ip = minikube ip
 
-          Write-Host "Service URL: $url"
+          # Get NodePort
+          $nodePort = kubectl get svc myapp-svc -o jsonpath="{.spec.ports[0].nodePort}"
 
-          # Try /health multiple times (pods may still be warming up)
+          Write-Host "Minikube IP: $ip"
+          Write-Host "NodePort: $nodePort"
+
+          $url = "http://$ip:$nodePort/health"
+          Write-Host "Testing URL: $url"
+
+          # Retry health check
           for ($i=1; $i -le 20; $i++) {
             try {
-              $resp = Invoke-RestMethod "$url/health" -TimeoutSec 5
+              $resp = Invoke-RestMethod $url -TimeoutSec 5
               Write-Host "Health OK:" $resp
               exit 0
             } catch {
-              Write-Host "Health not ready yet... attempt $i"
+              Write-Host "Not ready yet... attempt $i"
               Start-Sleep -Seconds 3
             }
           }
-          throw "Health check failed after retries"
+
+          throw "Health check failed"
